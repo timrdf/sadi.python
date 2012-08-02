@@ -141,20 +141,7 @@ class JSONSerializer:
                 graph.add(subject, predicate, obj)
 # end JSONSerializer
 
-services = {}
-
-def application(environ, start_response): # TODO: delete this, b/c wsgi?
-    requestMethod = environ['REQUEST_METHOD']
-    try:
-        service = services[environ['PATH_INFO']]
-	if requestMethod == 'GET':
-            return service.wsgi_get(environ, start_response)
-        elif requestMethod == 'POST':
-            return service.wsgi_post(environ, start_response)
-        else: # Method not supported
-            return wsgiMethodNotSupported(environ, start_response)
-    except:
-        return wsgi404(environ, start_response)
+services = {} # TODO: why is this here?
 
 # sadi.py users should extend the 'Service' class to create their SADI services.
 # 'Service' will have different methods depending on the web framework 
