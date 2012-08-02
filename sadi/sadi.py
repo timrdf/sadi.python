@@ -21,35 +21,30 @@ rdflib.plugin.register('sparql', rdflib.query.Result,
 ns.register(mygrid="http://www.mygrid.org.uk/mygrid-moby-service#")
 ns.register(protegedc="http://protege.stanford.edu/plugins/owl/dc/protege-dc.owl#")
 
-# Define the 'Service' class to have the appropriate methods for the most
-# preferred web framework that is available in the current environment,
-# while omitting the methods needed for the other web frameworks.
-#
+# Determine the preferred web framework that is available in the current environment.
 # Prefer mod_python, then GoogleAppEngine, then twisted.
 
-modPython       = False # Enabled if libraries are installed.
-googleAppEngine = False # Enabled if libraries are installed.
-useTwisted      = False # Enabled if libraries are installed.
+preferredWebFramework = None
+
 try:
     from mod_python import apache, publisher
-    modPython = True
+    preferredWebFramework = 'mod_python'
 except:
     try:
         from google.appengine.ext import webapp
         from google.appengine.ext.webapp.util import run_wsgi_app
         sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),
                                     'gae/lib/python2.5/site-packages/'))
-        googleAppEngine = True
+        preferredWebFramework = 'google-app-engine'
     except:
         try:
             from twisted.internet import reactor
             from twisted.web import server
             import twisted.web.resource
             from twisted.web.static import File
-            useTwisted = True
+            preferredWebFramework = 'twisted'
         except:
             pass
-
 
 class DefaultSerializer:
     def __init__(self,inputFormat,outputFormat=None):
@@ -161,9 +156,14 @@ def application(environ, start_response): # TODO: delete this, b/c wsgi?
     except:
         return wsgi404(environ, start_response)
 
-# ServiceBase is the class that sadi.py users should extend to create 
-# their own SADI service. ServiceBase will have different methods
-# depending on the web framework environment that is detected above.
+# sadi.py users should extend the 'Service' class to create their SADI services.
+# 'Service' will have different methods depending on the web framework 
+# environment that is detected above. 
+#
+# 'Service' becomes one of:
+#    ServiceBase    if preferredWebFramework == 'mod_python'
+#    GAEService     if preferredWebFramework == 'google-app-engine'
+#    TwistedService if preferredWebFramework == 'twisted'
 
 class ServiceBase:
 
@@ -297,7 +297,7 @@ class ServiceBase:
             self.process(i, o)
         return outputStore.reader.graph
 
-if googleAppEngine:
+if preferredWebFramework == 'google-app-engine':
 
     class GAEService(ServiceBase, webapp.RequestHandler):
         def __init__(self):
@@ -322,7 +322,7 @@ if googleAppEngine:
 
     Service = GAEService
 
-elif useTwisted:
+elif preferredWebFramework == 'twisted':
 
     class TwistedService(ServiceBase, twisted.web.resource.Resource):
         isLeaf = True
@@ -355,7 +355,7 @@ else:
     Service = ServiceBase
 
 handler = None
-if modPython:
+if preferredWebFramework == 'mod_python':
     def handler(req):
         req.allow_methods(["GET", "POST"])
         if req.method not in ["GET", "POST"]:
@@ -486,7 +486,7 @@ if modPython:
 #    handler = sadiHandler
 
 def publishTwistedService(service, port=8080):
-    if not useTwisted:
+    if preferredWebFramework != 'twisted':
         raise Exception("Twisted isn't installed in this Python environment, and is needed to run a SADI service through twisted.")
     root = twisted.web.resource.Resource()
     root.putChild(service.name, service)
