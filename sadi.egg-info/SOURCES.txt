@@ -1,0 +1,11 @@
+example.py
+ez_setup.py
+setup.py
+sadi/__init__.py
+sadi/mimeparse.py
+sadi/sadi.py
+sadi.egg-info/PKG-INFO
+sadi.egg-info/SOURCES.txt
+sadi.egg-info/dependency_links.txt
+sadi.egg-info/requires.txt
+sadi.egg-info/top_level.txt

@@ -1,0 +1,11 @@
+Metadata-Version: 1.0
+Name: sadi
+Version: 0.1.5
+Summary: SADI for python.
+Home-page: http://code.google.com/p/sadi/
+Author: James McCusker
+Author-email: mccusker@gmail.gom
+License: New BSD License
+Description: UNKNOWN
+Keywords: Webservices SemanticWeb,RDF,Python,REST
+Platform: UNKNOWN

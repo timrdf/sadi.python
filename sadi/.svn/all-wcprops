@@ -1,0 +1,23 @@
+K 25
+svn:wc:ra_dav:version-url
+V 48
+/svn/!svn/ver/2192/trunk/python/sadi.python/sadi
+END
+__init__.py
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/!svn/ver/1257/trunk/python/sadi.python/sadi/__init__.py
+END
+sadi.py
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/svn/!svn/ver/2192/trunk/python/sadi.python/sadi/sadi.py
+END
+mimeparse.py
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/!svn/ver/1992/trunk/python/sadi.python/sadi/mimeparse.py
+END

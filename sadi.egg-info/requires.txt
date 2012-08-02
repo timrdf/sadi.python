@@ -1,0 +1,4 @@
+rdflib>=3.0
+surf
+rdfextras
+surf.rdflib
