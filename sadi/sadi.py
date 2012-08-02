@@ -270,21 +270,26 @@ class ServiceBase:
         instances = InputClass.all()
         return instances
 
-    def processGraph(self,content, type):
+    #
+    # Process the instances in the serialized graph in 'content'
+    # 'content' is the HTTP POST body and should be in serialization 'type'.
+    #
+    def processGraph(self, content, type):
         inputStore = Store(reader="rdflib", writer="rdflib",
                            rdflib_store='IOMemory')
         inputSession = Session(inputStore)
         self.deserialize(inputStore.reader.graph, content, type)
+
         outputStore = Store(reader="rdflib", writer="rdflib",
                             rdflib_store='IOMemory')
         outputSession = Session(outputStore)
-        OutputClass = outputSession.get_class(self.getOutputClass())
+        OutputClass   = outputSession.get_class(self.getOutputClass())
 
         instances = self.getInstances(inputSession, inputStore,
                                       inputStore.reader.graph)
         for i in instances:
             o = OutputClass(i.subject)
-            self.process(i, o)
+            self.process(i, o) # This is the method that sadi.py users implement
         return outputStore.reader.graph
 
 if preferredWebFramework == 'google-app-engine':
@@ -296,13 +301,14 @@ if preferredWebFramework == 'google-app-engine':
         def get(self):
             modelGraph = self.getServiceDescription()
             output = self.serialize(modelGraph, self.request.headers["Accept"])
-            self.response.headers.add_header("Content-Type",
-                                             output)
+            self.response.headers.add_header("Content-Type", output)
             self.response.write(output[1])
             
         def post(self):
             postType = self.getFormat(self.request.headers["Content-Type"])[1]
+            # Process the POSTed RDF graph
             graph = self.processGraph(content, postType)
+
             acceptType = self.getFormat(self.request.headers["Accept"])
             response.headers.add_header("Content-Type",acceptType[0])
             if acceptType[1] == 'json':
@@ -324,7 +330,7 @@ elif preferredWebFramework == 'twisted':
             modelGraph = self.getServiceDescription()
             acceptType = self.getFormat(request.getHeader("Accept"))
             request.setHeader("Content-Type",acceptType[0])
-            request.setHeader('Access-Control-Allow-Origin','*')
+            request.setHeader("Access-Control-Allow-Origin",'*')
             return self.serialize(modelGraph,request.getHeader("Accept"))
             #if acceptType[1] == 'json':
             #    return to_json(modelGraph)
@@ -332,13 +338,19 @@ elif preferredWebFramework == 'twisted':
         
         def render_POST(self, request):
             content = request.content.read()
+            # Process the POSTed RDF graph
             graph = self.processGraph(content, request.getHeader("Content-Type"))
+
             acceptType = self.getFormat(request.getHeader("Accept"))
             request.setHeader("Content-Type",acceptType[0])
-            request.setHeader('Access-Control-Allow-Origin','*')
+            request.setHeader("Access-Control-Allow-Origin",'*')
             return self.serialize(graph,request.getHeader("Accept"))
 
     Service = TwistedService
+
+elif preferredWebFramework == 'mod_python':
+
+    Service = ServiceBase
 
 else:
 
@@ -458,20 +470,22 @@ if preferredWebFramework == 'mod_python':
                 accept = req.headers_in["Accept"]
             acceptType = resource.getFormat(accept)
             req.content_type = acceptType[0]
-            req.headers_out['Access-Control-Allow-Origin'] = '*'
+            req.headers_out["Access-Control-Allow-Origin"] = '*'
             req.write(resource.serialize(modelGraph,req.headers_in['Accept']))
         else:
             content = req.read()
             contentType = "application/rdf+xml"
             if 'Content-Type' in req.headers_in:
                 contentType = req.headers_in["Content-Type"]
+            # Process the POSTed RDF graph
             graph = resource.processGraph(content, contentType)
+
             accept = "application/rdf+xml"
             if 'Accept' in req.headers_in:
                 accept = req.headers_in["Accept"]
             acceptType = resource.getFormat(accept)
             req.headers_out["Content-Type"] = acceptType[0]
-            req.headers_out['Access-Control-Allow-Origin'] = '*'
+            req.headers_out["Access-Control-Allow-Origin"] = '*'
             req.write(resource.serialize(graph,accept))
         return apache.OK
 
