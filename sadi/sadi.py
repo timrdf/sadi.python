@@ -1,3 +1,6 @@
+# Install required libraries using easy_install:
+# sudo easy_install 'rdflib>=3.0' surf rdfextras surf.rdflib
+
 from rdflib import *
 import simplejson
 import rdflib
@@ -5,30 +8,6 @@ import mimeparse
 from surf.serializer import to_json
 import simplejson as json
 import collections
-
-googleAppEngine = False
-useTwisted = False
-try:
-    from twisted.internet import reactor
-    from twisted.web import server
-    import twisted.web.resource
-    from twisted.web.static import File
-    useTwisted = True
-except:
-    try:
-        from google.appengine.ext import webapp
-        from google.appengine.ext.webapp.util import run_wsgi_app
-        sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                                      'gae/lib/python2.5/site-packages/'))
-        googleAppEngine = True
-    except:
-        pass
-modPython = False
-try:
-    from mod_python import apache, publisher
-    modPython = True
-except:
-    modPython = False
 
 from surf import *
 
@@ -42,9 +21,35 @@ rdflib.plugin.register('sparql', rdflib.query.Result,
 ns.register(mygrid="http://www.mygrid.org.uk/mygrid-moby-service#")
 ns.register(protegedc="http://protege.stanford.edu/plugins/owl/dc/protege-dc.owl#")
 
+# Define the 'Service' class to have the appropriate methods for the most
+# preferred web framework that is available in the current environment,
+# while omitting the methods needed for the other web frameworks.
+#
+# Prefer mod_python, then GoogleAppEngine, then twisted.
 
-# Install required libraries using easy_install:
-# sudo easy_install 'rdflib>=3.0' surf rdfextras surf.rdflib
+modPython       = False # Enabled if libraries are installed.
+googleAppEngine = False # Enabled if libraries are installed.
+useTwisted      = False # Enabled if libraries are installed.
+try:
+    from mod_python import apache, publisher
+    modPython = True
+except:
+    try:
+        from google.appengine.ext import webapp
+        from google.appengine.ext.webapp.util import run_wsgi_app
+        sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                    'gae/lib/python2.5/site-packages/'))
+        googleAppEngine = True
+    except:
+        try:
+            from twisted.internet import reactor
+            from twisted.web import server
+            import twisted.web.resource
+            from twisted.web.static import File
+            useTwisted = True
+        except:
+            pass
+
 
 class DefaultSerializer:
     def __init__(self,inputFormat,outputFormat=None):
@@ -139,13 +144,11 @@ class JSONSerializer:
                 else:
                     obj = self.getResource(o['value'])
                 graph.add(subject, predicate, obj)
+# end JSONSerializer
 
 services = {}
 
-def wsgi_register(service):
-    services['/'+service.name] = service
-
-def application(environ, start_response):
+def application(environ, start_response): # TODO: delete this, b/c wsgi?
     requestMethod = environ['REQUEST_METHOD']
     try:
         service = services[environ['PATH_INFO']]
@@ -158,29 +161,32 @@ def application(environ, start_response):
     except:
         return wsgi404(environ, start_response)
 
-class ServiceBase:
-    serviceDescription = None
+# ServiceBase is the class that sadi.py users should extend to create 
+# their own SADI service. ServiceBase will have different methods
+# depending on the web framework environment that is detected above.
 
-    comment = None
+class ServiceBase:
+
+    name                   = None
+    serviceNameText        = None
+    label                  = None
+    serviceDescription     = None
     serviceDescriptionText = None
-    serviceNameText = None
-    label = None
-    name = None
+    comment                = None
 
     def __init__(self):
         self.contentTypes = {
-            None:DefaultSerializer('xml'),
-            "application/rdf+xml":DefaultSerializer('xml'),
-            "text/rdf":DefaultSerializer('xml'),
-            'application/x-www-form-urlencoded':DefaultSerializer('xml'),
-            'text/turtle':DefaultSerializer('n3','turtle'),
-            'application/x-turtle':DefaultSerializer('n3','turtle'),
-            'text/plain':DefaultSerializer('nt'),
-            'text/n3':DefaultSerializer('n3'),
-            'text/html':DefaultSerializer('rdfa','xml'),
-            'application/json':JSONSerializer(),
-            }
-
+            None:                                DefaultSerializer('xml'),
+            'text/rdf':                          DefaultSerializer('xml'),
+            'application/rdf+xml':               DefaultSerializer('xml'),
+            'application/x-www-form-urlencoded': DefaultSerializer('xml'),
+            'text/turtle':                       DefaultSerializer('n3','turtle'),
+            'application/x-turtle':              DefaultSerializer('n3','turtle'),
+            'text/n3':                           DefaultSerializer('n3'),
+            'text/plain':                        DefaultSerializer('nt'),
+            'text/html':                         DefaultSerializer('rdfa','xml'),
+            'application/json':                  JSONSerializer(),
+        }
 
     def getFormat(self, contentType):
         if contentType == None:
@@ -223,7 +229,7 @@ class ServiceBase:
             self.Operation = self.getClass(ns.MYGRID['operation'])
             self.Parameter = self.getClass(ns.MYGRID['parameter'])
 
-            self.inputClass = self.getInputClass()
+            self.inputClass  = self.getInputClass()
             self.outputClass = self.getOutputClass()
             
             desc = self.Description("#")
@@ -236,6 +242,7 @@ class ServiceBase:
                 desc.mygrid_hasServiceDescriptionText = self.serviceDescriptionText
             if self.serviceNameText is not None:
                 desc.mygrid_hasServiceNameText = self.serviceNameText
+
             desc.mygrid_providedBy = self.getOrganization()
             desc.mygrid_providedBy[0].save()
             
@@ -253,13 +260,13 @@ class ServiceBase:
 
             if "getParameterClass" in dir(self):
                 self.parameterClass = self.getParameterClass()
-                secondaryParameter = self.Parameter("#params")
+                secondaryParameter  = self.Parameter("#params")
                 desc.mygrid_hasOperation[0].mygrid_secondaryParameter = secondaryParameter
                 secondaryParameter.mygrid_objectType = self.parameterClass
                 secondaryParameter.save()
 
             desc.mygrid_hasOperation[0].mygrid_outputParameter = outputParameter
-            desc.mygrid_hasOperation[0].mygrid_inputParameter = inputParameter
+            desc.mygrid_hasOperation[0].mygrid_inputParameter  = inputParameter
             desc.mygrid_hasOperation[0].save()
 
             self.annotateServiceDescription(desc)
@@ -290,29 +297,8 @@ class ServiceBase:
             self.process(i, o)
         return outputStore.reader.graph
 
-    def wsgi_get(self, environ, start_response):
-        modelGraph = self.getServiceDescription()
-        acceptType = self.getFormat(environ['HTTP_ACCEPT'])
-        response_headers = [
-            ('Content-type', acceptType[0]),
-            ('Access-Control-Allow-Origin','*')
-        ]
-        status = '200 OK'
-        start_response(status, response_headers)
-        return self.serialize(modelGraph,request.getHeader("Accept"))
-
-    def wsgi_post(self, environ, start_response):
-        status = '200 OK'
-        response_headers = [('Content-type', 'text/plain')]
-        start_response(status, response_headers)
-        content = request.content.read()
-        graph = self.processGraph(content, request.getHeader("Content-Type"))
-        acceptType = self.getFormat(request.getHeader("Accept"))
-        request.setHeader("Content-Type",acceptType[0])
-        request.setHeader('Access-Control-Allow-Origin','*')
-        return self.serialize(graph,request.getHeader("Accept"))
-    
 if googleAppEngine:
+
     class GAEService(ServiceBase, webapp.RequestHandler):
         def __init__(self):
             ServiceBase.__init__(self)
@@ -331,11 +317,15 @@ if googleAppEngine:
             response.headers.add_header("Content-Type",acceptType[0])
             if acceptType[1] == 'json':
                 return to_json(modelGraph)
-            else: return graph.serialize(format=acceptType[1])
+            else: 
+                return graph.serialize(format=acceptType[1])
+
     Service = GAEService
+
 elif useTwisted:
+
     class TwistedService(ServiceBase, twisted.web.resource.Resource):
-        isLeaf=True
+        isLeaf = True
         
         def __init__(self):
             ServiceBase.__init__(self)
@@ -359,7 +349,9 @@ elif useTwisted:
             return self.serialize(graph,request.getHeader("Accept"))
 
     Service = TwistedService
+
 else:
+
     Service = ServiceBase
 
 handler = None
