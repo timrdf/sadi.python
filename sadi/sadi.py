@@ -21,7 +21,9 @@ rdflib.plugin.register('sparql', rdflib.query.Result,
 ns.register(mygrid="http://www.mygrid.org.uk/mygrid-moby-service#")
 ns.register(protegedc="http://protege.stanford.edu/plugins/owl/dc/protege-dc.owl#")
 
-# Determine the preferred web framework that is available in the current environment.
+# Determine the preferred web framework that is available in the 
+# current environment. 
+#
 # Prefer mod_python, then GoogleAppEngine, then twisted.
 
 preferredWebFramework = None
@@ -62,7 +64,8 @@ class DefaultSerializer:
         return graph.serialize(format=self.outputFormat)
     def deserialize(self,graph, content):
         if type(content) == str or type(content) == unicode:
-            graph.parse(StringIO(unicode(content),newline=None),format=self.inputFormat)
+            graph.parse(StringIO(unicode(content),newline=None),
+                        format=self.inputFormat)
         else:
             graph.parse(content,format=self.inputFormat)
 
@@ -163,16 +166,16 @@ class ServiceBase:
 
     def __init__(self):
         self.contentTypes = {
-            None:                                DefaultSerializer('xml'),
-            'text/rdf':                          DefaultSerializer('xml'),
-            'application/rdf+xml':               DefaultSerializer('xml'),
-            'application/x-www-form-urlencoded': DefaultSerializer('xml'),
-            'text/turtle':                       DefaultSerializer('n3','turtle'),
-            'application/x-turtle':              DefaultSerializer('n3','turtle'),
-            'text/n3':                           DefaultSerializer('n3'),
-            'text/plain':                        DefaultSerializer('nt'),
-            'text/html':                         DefaultSerializer('rdfa','xml'),
-            'application/json':                  JSONSerializer(),
+           None:                               DefaultSerializer('xml'),
+          'text/rdf':                          DefaultSerializer('xml'),
+          'application/rdf+xml':               DefaultSerializer('xml'),
+          'application/x-www-form-urlencoded': DefaultSerializer('xml'),
+          'text/turtle':                       DefaultSerializer('n3','turtle'),
+          'application/x-turtle':              DefaultSerializer('n3','turtle'),
+          'text/n3':                           DefaultSerializer('n3'),
+          'text/plain':                        DefaultSerializer('nt'),
+          'text/html':                         DefaultSerializer('rdfa','xml'),
+          'application/json':                  JSONSerializer(),
         }
 
     def getFormat(self, contentType):
@@ -445,7 +448,8 @@ if preferredWebFramework == 'mod_python':
         realm, user, passwd = publisher.process_auth(req, module)
 
         # resolve the object ('traverse')
-        resource = publisher.resolve_object(req, module, func_path, realm, user, passwd)
+        resource = publisher.resolve_object(req, module, func_path, 
+                                            realm, user, passwd)
 
         if req.method == 'GET':
             modelGraph = resource.getServiceDescription()
@@ -470,11 +474,11 @@ if preferredWebFramework == 'mod_python':
             req.headers_out['Access-Control-Allow-Origin'] = '*'
             req.write(resource.serialize(graph,accept))
         return apache.OK
-#    handler = sadiHandler
 
 def publishTwistedService(service, port=8080):
     if preferredWebFramework != 'twisted':
-        raise Exception("Twisted isn't installed in this Python environment, and is needed to run a SADI service through twisted.")
+        raise Exception("Twisted isn't installed in this Python environment, " + 
+                        "and is needed to run a SADI service through twisted.")
     root = twisted.web.resource.Resource()
     root.putChild(service.name, service)
     site = server.Site(root)
