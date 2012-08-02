@@ -477,7 +477,7 @@ if preferredWebFramework == 'mod_python':
 
 def publishTwistedService(service, port=8080):
     if preferredWebFramework != 'twisted':
-        raise Exception("Twisted isn't installed in this Python environment, " + 
+        raise Exception("Twisted isn't installed in this Python environment, " +
                         "and is needed to run a SADI service through twisted.")
     root = twisted.web.resource.Resource()
     root.putChild(service.name, service)
