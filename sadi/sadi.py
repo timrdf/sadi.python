@@ -292,7 +292,11 @@ class ServiceBase:
             self.process(i, o) # This is the method that sadi.py users implement
         return outputStore.reader.graph
 
-if preferredWebFramework == 'google-app-engine':
+if preferredWebFramework == 'mod_python':
+
+    Service = ServiceBase
+
+elif preferredWebFramework == 'google-app-engine':
 
     class GAEService(ServiceBase, webapp.RequestHandler):
         def __init__(self):
@@ -347,10 +351,6 @@ elif preferredWebFramework == 'twisted':
             return self.serialize(graph,request.getHeader("Accept"))
 
     Service = TwistedService
-
-elif preferredWebFramework == 'mod_python':
-
-    Service = ServiceBase
 
 else:
 
