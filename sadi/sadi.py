@@ -9,6 +9,10 @@ from surf.serializer import to_json
 import simplejson as json
 import collections
 
+import time
+import threading
+import Queue
+
 from surf import *
 
 from io import StringIO
@@ -144,8 +148,24 @@ class JSONSerializer:
                 graph.add(subject, predicate, obj)
 # end JSONSerializer
 
-services = {} # TODO: why is this here?
+class ThreadProcessor(threading.Thread): 
+    def __init__(self, service, queue, OutputClass):
+        threading.Thread.__init__(self)
+        self.service     = service
+        self.queue       = queue
+        self.OutputClass = OutputClass
 
+    def run(self):
+        while True:
+            instance = self.queue.get()
+
+            # Add RDF descriptions to 'instance' (for returning to client).
+            self.service.process(instance, self.OutputClass(instance.subject))
+            #            ^^ This is the method that sadi.py users implement.
+ 
+            self.queue.task_done()
+
+services = {} # TODO: why is this here?
 # sadi.py users should extend the 'Service' class to create their SADI services.
 # 'Service' will have different methods depending on the web framework 
 # environment that is detected above. 
@@ -163,6 +183,9 @@ class ServiceBase:
     serviceDescription     = None
     serviceDescriptionText = None
     comment                = None
+    outputStore            = None
+    instanceQueue          = queue = Queue.Queue()
+    asynchronousThread     = None # Note: might be better to keep this within processGraph()'s scope.
 
     def __init__(self):
         self.contentTypes = {
@@ -280,17 +303,40 @@ class ServiceBase:
         inputSession = Session(inputStore)
         self.deserialize(inputStore.reader.graph, content, type)
 
-        outputStore = Store(reader="rdflib", writer="rdflib",
-                            rdflib_store='IOMemory')
-        outputSession = Session(outputStore)
+        self.outputStore = Store(reader="rdflib", writer="rdflib",
+                                 rdflib_store='IOMemory')
+        outputSession = Session(self.outputStore)
         OutputClass   = outputSession.get_class(self.getOutputClass())
 
         instances = self.getInstances(inputSession, inputStore,
                                       inputStore.reader.graph)
         for i in instances:
-            o = OutputClass(i.subject)
-            self.process(i, o) # This is the method that sadi.py users implement
-        return outputStore.reader.graph
+            self.instanceQueue.put(i)
+
+        # Kick off thread
+        self.asynchronousThread = ThreadProcessor(self,self.queue,OutputClass)
+        self.asynchronousThread.setDaemon(True)
+        self.asynchronousThread.start()
+        
+        # Attempt to complete job synchronously.
+        time.sleep(1)
+         
+        if self.queue.empty():
+           # We can finish synchronously (returns HTTP 200).
+           return self.outputStore.reader.graph
+        else:
+           # We must finish the job asynchronously (return 202).
+           print 'need to break off into asynchronous'
+           incomplete = Store(reader="rdflib", writer="rdflib",
+                              rdflib_store='IOMemory')
+           OutputClass = Session(incomplete).get_class(self.getOutputClass())
+
+           for i in instances:
+               subject = OutputClass(i.subject)
+               subject.rdfs_seeAlso = 'poll='
+               subject.save()
+ 
+           return incomplete.reader.graph
 
 if preferredWebFramework == 'mod_python':
 
@@ -331,14 +377,23 @@ elif preferredWebFramework == 'twisted':
             ServiceBase.__init__(self)
 
         def render_GET(self, request):
-            modelGraph = self.getServiceDescription()
-            acceptType = self.getFormat(request.getHeader("Accept"))
-            request.setHeader("Content-Type",acceptType[0])
-            request.setHeader("Access-Control-Allow-Origin",'*')
-            return self.serialize(modelGraph,request.getHeader("Accept"))
-            #if acceptType[1] == 'json':
-            #    return to_json(modelGraph)
-            #else: return selfmodelGraph.serialize(format=acceptType[1])
+            if 'poll' in request.args:
+                # Return results of previous POST (if it is complete).
+                print request.args['poll']
+                if self.queue.empty():
+                    return self.serialize(self.outputStore.reader.graph,request.getHeader("Accept"))
+                else:
+                    return 'you polled, but we still have about ' + str(self.queue.qsize()) + ' more to process.'
+            else:
+                # Return the service description.
+                modelGraph = self.getServiceDescription()
+                acceptType = self.getFormat(request.getHeader("Accept"))
+                request.setHeader("Content-Type",acceptType[0])
+                request.setHeader("Access-Control-Allow-Origin",'*')
+                return self.serialize(modelGraph,request.getHeader("Accept"))
+                #if acceptType[1] == 'json':
+                #    return to_json(modelGraph)
+                #else: return selfmodelGraph.serialize(format=acceptType[1])
         
         def render_POST(self, request):
             content = request.content.read()

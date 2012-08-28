@@ -1,3 +1,6 @@
+# Install required libraries using easy_install:
+# sudo easy_install 'rdflib>=3.0' surf rdfextras surf.rdflib
+
 from rdflib import *
 import simplejson
 import rdflib
@@ -6,29 +9,9 @@ from surf.serializer import to_json
 import simplejson as json
 import collections
 
-googleAppEngine = False
-useTwisted = False
-try:
-    from twisted.internet import reactor
-    from twisted.web import server
-    import twisted.web.resource
-    from twisted.web.static import File
-    useTwisted = True
-except:
-    try:
-        from google.appengine.ext import webapp
-        from google.appengine.ext.webapp.util import run_wsgi_app
-        sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                                      'gae/lib/python2.5/site-packages/'))
-        googleAppEngine = True
-    except:
-        pass
-modPython = False
-try:
-    from mod_python import apache, publisher
-    modPython = True
-except:
-    modPython = False
+import time
+import threading
+import Queue
 
 from surf import *
 
@@ -42,9 +25,32 @@ rdflib.plugin.register('sparql', rdflib.query.Result,
 ns.register(mygrid="http://www.mygrid.org.uk/mygrid-moby-service#")
 ns.register(protegedc="http://protege.stanford.edu/plugins/owl/dc/protege-dc.owl#")
 
+# Determine the preferred web framework that is available in the 
+# current environment. 
+#
+# Prefer mod_python, then GoogleAppEngine, then twisted.
 
-# Install required libraries using easy_install:
-# sudo easy_install 'rdflib>=3.0' surf rdfextras surf.rdflib
+preferredWebFramework = None
+
+try:
+    from mod_python import apache, publisher
+    preferredWebFramework = 'mod_python'
+except:
+    try:
+        from google.appengine.ext import webapp
+        from google.appengine.ext.webapp.util import run_wsgi_app
+        sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                    'gae/lib/python2.5/site-packages/'))
+        preferredWebFramework = 'google-app-engine'
+    except:
+        try:
+            from twisted.internet import reactor
+            from twisted.web import server
+            import twisted.web.resource
+            from twisted.web.static import File
+            preferredWebFramework = 'twisted'
+        except:
+            pass
 
 class DefaultSerializer:
     def __init__(self,inputFormat,outputFormat=None):
@@ -62,7 +68,8 @@ class DefaultSerializer:
         return graph.serialize(format=self.outputFormat)
     def deserialize(self,graph, content):
         if type(content) == str or type(content) == unicode:
-            graph.parse(StringIO(unicode(content),newline=None),format=self.inputFormat)
+            graph.parse(StringIO(unicode(content),newline=None),
+                        format=self.inputFormat)
         else:
             graph.parse(content,format=self.inputFormat)
 
@@ -139,47 +146,60 @@ class JSONSerializer:
                 else:
                     obj = self.getResource(o['value'])
                 graph.add(subject, predicate, obj)
+# end JSONSerializer
 
-services = {}
+class ThreadProcessor(threading.Thread): 
+    def __init__(self, service, queue, OutputClass):
+        threading.Thread.__init__(self)
+        self.service     = service
+        self.queue       = queue
+        self.OutputClass = OutputClass
 
-def wsgi_register(service):
-    services['/'+service.name] = service
+    def run(self):
+        while True:
+            instance = self.queue.get()
 
-def application(environ, start_response):
-    requestMethod = environ['REQUEST_METHOD']
-    try:
-        service = services[environ['PATH_INFO']]
-	if requestMethod == 'GET':
-            return service.wsgi_get(environ, start_response)
-        elif requestMethod == 'POST':
-            return service.wsgi_post(environ, start_response)
-        else: # Method not supported
-            return wsgiMethodNotSupported(environ, start_response)
-    except:
-        return wsgi404(environ, start_response)
+            # Add RDF descriptions to 'instance' (for returning to client).
+            self.service.process(instance, self.OutputClass(instance.subject))
+            #            ^^ This is the method that sadi.py users implement.
+ 
+            self.queue.task_done()
+
+services = {} # TODO: why is this here?
+# sadi.py users should extend the 'Service' class to create their SADI services.
+# 'Service' will have different methods depending on the web framework 
+# environment that is detected above. 
+#
+# 'Service' becomes one of:
+#    ServiceBase    if preferredWebFramework == 'mod_python'
+#    GAEService     if preferredWebFramework == 'google-app-engine'
+#    TwistedService if preferredWebFramework == 'twisted'
 
 class ServiceBase:
-    serviceDescription = None
 
-    comment = None
+    name                   = None
+    serviceNameText        = None
+    label                  = None
+    serviceDescription     = None
     serviceDescriptionText = None
-    serviceNameText = None
-    label = None
-    name = None
+    comment                = None
+    outputStore            = None
+    instanceQueue          = queue = Queue.Queue()
+    asynchronousThread     = None # Note: might be better to keep this within processGraph()'s scope.
 
     def __init__(self):
         self.contentTypes = {
-            None:DefaultSerializer('xml'),
-            "application/rdf+xml":DefaultSerializer('xml'),
-            'application/x-www-form-urlencoded':DefaultSerializer('xml'),
-            'text/turtle':DefaultSerializer('n3','turtle'),
-            'application/x-turtle':DefaultSerializer('n3','turtle'),
-            'text/plain':DefaultSerializer('nt'),
-            'text/n3':DefaultSerializer('n3'),
-            'text/html':DefaultSerializer('rdfa','xml'),
-            'application/json':JSONSerializer(),
-            }
-
+           None:                               DefaultSerializer('xml'),
+          'text/rdf':                          DefaultSerializer('xml'),
+          'application/rdf+xml':               DefaultSerializer('xml'),
+          'application/x-www-form-urlencoded': DefaultSerializer('xml'),
+          'text/turtle':                       DefaultSerializer('n3','turtle'),
+          'application/x-turtle':              DefaultSerializer('n3','turtle'),
+          'text/n3':                           DefaultSerializer('n3'),
+          'text/plain':                        DefaultSerializer('nt'),
+          'text/html':                         DefaultSerializer('rdfa','xml'),
+          'application/json':                  JSONSerializer(),
+        }
 
     def getFormat(self, contentType):
         if contentType == None:
@@ -222,7 +242,7 @@ class ServiceBase:
             self.Operation = self.getClass(ns.MYGRID['operation'])
             self.Parameter = self.getClass(ns.MYGRID['parameter'])
 
-            self.inputClass = self.getInputClass()
+            self.inputClass  = self.getInputClass()
             self.outputClass = self.getOutputClass()
             
             desc = self.Description("#")
@@ -235,6 +255,7 @@ class ServiceBase:
                 desc.mygrid_hasServiceDescriptionText = self.serviceDescriptionText
             if self.serviceNameText is not None:
                 desc.mygrid_hasServiceNameText = self.serviceNameText
+
             desc.mygrid_providedBy = self.getOrganization()
             desc.mygrid_providedBy[0].save()
             
@@ -252,13 +273,13 @@ class ServiceBase:
 
             if "getParameterClass" in dir(self):
                 self.parameterClass = self.getParameterClass()
-                secondaryParameter = self.Parameter("#params")
+                secondaryParameter  = self.Parameter("#params")
                 desc.mygrid_hasOperation[0].mygrid_secondaryParameter = secondaryParameter
                 secondaryParameter.mygrid_objectType = self.parameterClass
                 secondaryParameter.save()
 
             desc.mygrid_hasOperation[0].mygrid_outputParameter = outputParameter
-            desc.mygrid_hasOperation[0].mygrid_inputParameter = inputParameter
+            desc.mygrid_hasOperation[0].mygrid_inputParameter  = inputParameter
             desc.mygrid_hasOperation[0].save()
 
             self.annotateServiceDescription(desc)
@@ -272,46 +293,57 @@ class ServiceBase:
         instances = InputClass.all()
         return instances
 
-    def processGraph(self,content, type):
+    #
+    # Process the instances in the serialized graph in 'content'
+    # 'content' is the HTTP POST body and should be in serialization 'type'.
+    #
+    def processGraph(self, content, type):
         inputStore = Store(reader="rdflib", writer="rdflib",
                            rdflib_store='IOMemory')
         inputSession = Session(inputStore)
         self.deserialize(inputStore.reader.graph, content, type)
-        outputStore = Store(reader="rdflib", writer="rdflib",
-                            rdflib_store='IOMemory')
-        outputSession = Session(outputStore)
-        OutputClass = outputSession.get_class(self.getOutputClass())
+
+        self.outputStore = Store(reader="rdflib", writer="rdflib",
+                                 rdflib_store='IOMemory')
+        outputSession = Session(self.outputStore)
+        OutputClass   = outputSession.get_class(self.getOutputClass())
 
         instances = self.getInstances(inputSession, inputStore,
                                       inputStore.reader.graph)
         for i in instances:
-            o = OutputClass(i.subject)
-            self.process(i, o)
-        return outputStore.reader.graph
+            self.instanceQueue.put(i)
 
-    def wsgi_get(self, environ, start_response):
-        modelGraph = self.getServiceDescription()
-        acceptType = self.getFormat(environ['HTTP_ACCEPT'])
-        response_headers = [
-            ('Content-type', acceptType[0]),
-            ('Access-Control-Allow-Origin','*')
-        ]
-        status = '200 OK'
-        start_response(status, response_headers)
-        return self.serialize(modelGraph,request.getHeader("Accept"))
+        # Kick off thread
+        self.asynchronousThread = ThreadProcessor(self,self.queue,OutputClass)
+        self.asynchronousThread.setDaemon(True)
+        self.asynchronousThread.start()
+        
+        # Attempt to complete job synchronously.
+        time.sleep(1)
+         
+        if self.queue.empty():
+           # We can finish synchronously (returns HTTP 200).
+           return self.outputStore.reader.graph
+        else:
+           # We must finish the job asynchronously (return 202).
+           print 'need to break off into asynchronous'
+           incomplete = Store(reader="rdflib", writer="rdflib",
+                              rdflib_store='IOMemory')
+           OutputClass = Session(incomplete).get_class(self.getOutputClass())
 
-    def wsgi_post(self, environ, start_response):
-        status = '200 OK'
-        response_headers = [('Content-type', 'text/plain')]
-        start_response(status, response_headers)
-        content = request.content.read()
-        graph = self.processGraph(content, request.getHeader("Content-Type"))
-        acceptType = self.getFormat(request.getHeader("Accept"))
-        request.setHeader("Content-Type",acceptType[0])
-        request.setHeader('Access-Control-Allow-Origin','*')
-        return self.serialize(graph,request.getHeader("Accept"))
-    
-if googleAppEngine:
+           for i in instances:
+               subject = OutputClass(i.subject)
+               subject.rdfs_seeAlso = 'poll='
+               subject.save()
+ 
+           return incomplete.reader.graph
+
+if preferredWebFramework == 'mod_python':
+
+    Service = ServiceBase
+
+elif preferredWebFramework == 'google-app-engine':
+
     class GAEService(ServiceBase, webapp.RequestHandler):
         def __init__(self):
             ServiceBase.__init__(self)
@@ -319,51 +351,69 @@ if googleAppEngine:
         def get(self):
             modelGraph = self.getServiceDescription()
             output = self.serialize(modelGraph, self.request.headers["Accept"])
-            self.response.headers.add_header("Content-Type",
-                                             output)
+            self.response.headers.add_header("Content-Type", output)
             self.response.write(output[1])
             
         def post(self):
             postType = self.getFormat(self.request.headers["Content-Type"])[1]
+            # Process the POSTed RDF graph
             graph = self.processGraph(content, postType)
+
             acceptType = self.getFormat(self.request.headers["Accept"])
             response.headers.add_header("Content-Type",acceptType[0])
             if acceptType[1] == 'json':
                 return to_json(modelGraph)
-            else: return graph.serialize(format=acceptType[1])
+            else: 
+                return graph.serialize(format=acceptType[1])
+
     Service = GAEService
-elif useTwisted:
+
+elif preferredWebFramework == 'twisted':
+
     class TwistedService(ServiceBase, twisted.web.resource.Resource):
-        isLeaf=True
+        isLeaf = True
         
         def __init__(self):
             ServiceBase.__init__(self)
 
         def render_GET(self, request):
-            modelGraph = self.getServiceDescription()
-            acceptType = self.getFormat(request.getHeader("Accept"))
-            request.setHeader("Content-Type",acceptType[0])
-            request.setHeader('Access-Control-Allow-Origin','*')
-            return self.serialize(modelGraph,request.getHeader("Accept"))
-            #if acceptType[1] == 'json':
-            #    return to_json(modelGraph)
-            #else: return selfmodelGraph.serialize(format=acceptType[1])
+            if 'poll' in request.args:
+                # Return results of previous POST (if it is complete).
+                print request.args['poll']
+                if self.queue.empty():
+                    return self.serialize(self.outputStore.reader.graph,request.getHeader("Accept"))
+                else:
+                    return 'you polled, but we still have about ' + str(self.queue.qsize()) + ' more to process.'
+            else:
+                # Return the service description.
+                modelGraph = self.getServiceDescription()
+                acceptType = self.getFormat(request.getHeader("Accept"))
+                request.setHeader("Content-Type",acceptType[0])
+                request.setHeader("Access-Control-Allow-Origin",'*')
+                return self.serialize(modelGraph,request.getHeader("Accept"))
+                #if acceptType[1] == 'json':
+                #    return to_json(modelGraph)
+                #else: return selfmodelGraph.serialize(format=acceptType[1])
         
         def render_POST(self, request):
             content = request.content.read()
+            # Process the POSTed RDF graph
             graph = self.processGraph(content, request.getHeader("Content-Type"))
+
             acceptType = self.getFormat(request.getHeader("Accept"))
             request.setHeader("Content-Type",acceptType[0])
-            request.setHeader('Access-Control-Allow-Origin','*')
+            request.setHeader("Access-Control-Allow-Origin",'*')
             return self.serialize(graph,request.getHeader("Accept"))
 
     Service = TwistedService
+
 else:
+
     Service = ServiceBase
 
-#handler = None
-#if modPython:
-def handler(req):
+handler = None
+if preferredWebFramework == 'mod_python':
+    def handler(req):
         req.allow_methods(["GET", "POST"])
         if req.method not in ["GET", "POST"]:
             raise apache.SERVER_RETURN, apache.HTTP_METHOD_NOT_ALLOWED
@@ -465,34 +515,39 @@ def handler(req):
         realm, user, passwd = publisher.process_auth(req, module)
 
         # resolve the object ('traverse')
-        resource = publisher.resolve_object(req, module, func_path, realm, user, passwd)
+        resource = publisher.resolve_object(req, module, func_path, 
+                                            realm, user, passwd)
 
         if req.method == 'GET':
             modelGraph = resource.getServiceDescription()
-            acceptType = 'application/rdf+xml'
+            accept = 'application/rdf+xml'
             if 'Accept' in req.headers_in:
-                acceptType = req.headers_in["Accept"]
-            acceptType = resource.getFormat(acceptType)
+                accept = req.headers_in["Accept"]
+            acceptType = resource.getFormat(accept)
             req.content_type = acceptType[0]
-            req.headers_out['Access-Control-Allow-Origin'] = '*'
+            req.headers_out["Access-Control-Allow-Origin"] = '*'
             req.write(resource.serialize(modelGraph,req.headers_in['Accept']))
         else:
             content = req.read()
             contentType = "application/rdf+xml"
             if 'Content-Type' in req.headers_in:
                 contentType = req.headers_in["Content-Type"]
+            # Process the POSTed RDF graph
             graph = resource.processGraph(content, contentType)
+
             accept = "application/rdf+xml"
             if 'Accept' in req.headers_in:
                 accept = req.headers_in["Accept"]
             acceptType = resource.getFormat(accept)
             req.headers_out["Content-Type"] = acceptType[0]
-            req.headers_out['Access-Control-Allow-Origin'] = '*'
+            req.headers_out["Access-Control-Allow-Origin"] = '*'
             req.write(resource.serialize(graph,accept))
         return apache.OK
-#    handler = sadiHandler
 
 def publishTwistedService(service, port=8080):
+    if preferredWebFramework != 'twisted':
+        raise Exception("Twisted isn't installed in this Python environment, " +
+                        "and is needed to run a SADI service through twisted.")
     root = twisted.web.resource.Resource()
     root.putChild(service.name, service)
     site = server.Site(root)
